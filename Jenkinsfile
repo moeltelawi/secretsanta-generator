@@ -1,105 +1,84 @@
 pipeline {
     agent any
-    tools{
-        jdk 'jdk17'
-        maven 'maven3'
+    tools {
+        jdk 'JDK11'
+        maven 'Maven3'
     }
     environment{
         SCANNER_HOME= tool 'sonar-scanner'
     }
-
     stages {
-        stage('git-checkout') {
+        stage('Git CheckOut') {
             steps {
-                git 'https://github.com/jaiswaladi246/secretsanta-generator.git'
-            }
-        }
-
-        stage('Code-Compile') {
-            steps {
-               sh "mvn clean compile"
+                git changelog: false, poll: false, url: 'https://github.com/moeltelawi/secretsanta-generator.git'
             }
         }
         
-        stage('Unit Tests') {
+        stage('Compile') {
             steps {
-               sh "mvn test"
+                sh 'mvn clean compile'
             }
         }
         
-		stage('OWASP Dependency Check') {
+        stage('SonerQube Check') {
             steps {
-               dependencyCheck additionalArguments: ' --scan ./ ', odcInstallation: 'DC'
-                    dependencyCheckPublisher pattern: '**/dependency-check-report.xml'
-            }
-        }
-
-
-        stage('Sonar Analysis') {
-            steps {
-               withSonarQubeEnv('sonar'){
-                   sh ''' $SCANNER_HOME/bin/sonar-scanner -Dsonar.projectName=Santa \
-                   -Dsonar.java.binaries=. \
-                   -Dsonar.projectKey=Santa '''
-               }
-            }
-        }
-
-		 
-        stage('Code-Build') {
-            steps {
-               sh "mvn clean package"
-            }
-        }
-
-         stage('Docker Build') {
-            steps {
-               script{
-                   withDockerRegistry(credentialsId: 'docker-cred') {
-                    sh "docker build -t  santa123 . "
-                 }
-               }
-            }
-        }
-
-        stage('Docker Push') {
-            steps {
-               script{
-                   withDockerRegistry(credentialsId: 'docker-cred') {
-                    sh "docker tag santa123 adijaiswal/santa123:latest"
-                    sh "docker push adijaiswal/santa123:latest"
-                 }
-               }
+                sh '''
+                $SCANNER_HOME/bin/sonar-scanner -Dsonar.projectName=Santa \
+                -Dsonar.java.binaries=. \
+                -Dsonar.host.url=http://127.0.0.1:7778/ \
+                -Dsonar.login=squ_0618b52c171384ef9fc22916edcb55a09b729dca \
+                -Dsonar.projectName=Santa \
+                -Dsonar.projectKey=Santa
+                '''
             }
         }
         
-        	 
-        stage('Docker Image Scan') {
+        stage('OWASP check') {
             steps {
-               sh "trivy image adijaiswal/santa123:latest "
-            }
-        }}
-        
-         post {
-            always {
-                emailext (
-                    subject: "Pipeline Status: ${BUILD_NUMBER}",
-                    body: '''<html>
-                                <body>
-                                    <p>Build Status: ${BUILD_STATUS}</p>
-                                    <p>Build Number: ${BUILD_NUMBER}</p>
-                                    <p>Check the <a href="${BUILD_URL}">console output</a>.</p>
-                                </body>
-                            </html>''',
-                    to: 'jaiswaladi246@gmail.com',
-                    from: 'jenkins@example.com',
-                    replyTo: 'jenkins@example.com',
-                    mimeType: 'text/html'
-                )
+                dependencyCheck additionalArguments: ' --scan ./ ', odcInstallation: 'DC'
+                dependencyCheckPublisher pattern: '**/dependency-check-report.xml'
             }
         }
-		
-		
+        stage('Build App JAR Package') {
+            steps {
+                sh 'mvn clean install'
+            }
+        }
+                stage('Build app Image and push it to Docker Hub') {
+            steps {
+                    script {
+                    docker.withRegistry('https://index.docker.io/v1/', 'Docker-Hub') {
+                        def image = docker.build("eltelawi/santa:latest")
+                        image.push()
+                    }
+                }
+                // This step should not normally be used in your script. Consult the inline help for details.
+//                withDockerRegistry(credentialsId: 'Docker-Hub', toolName: 'docker') {
+                    // some block
+//                    sh 'docker build -t santa .'
+//                    sh 'docker tag santa eltelawi/santa:latest'
+//                    sh 'docker push'
+//                }
+            }
+        }
+stage('Trivy Scan') {
+    steps {
+        sh """
+        mkdir -p trivy-report
+        trivy image --timeout 15m --format table --output trivy-report/report.txt eltelawi/santa:latest
+        """
+    }
+}
 
-    
+        stage('Deploy Image') {
+            steps {
+                script {
+                    sh '''
+                    docker rm -f santa-app || true
+                    docker run -d --name santa-app -p 8080:8080 eltelawi/santa:latest
+                    '''
+                }
+            }
+        }
+    }
 }
